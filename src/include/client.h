@@ -3,12 +3,32 @@
 
 #include <iostream>
 #include <utility>
+#include <vector>
+#include <queue>
+#include <set>
+#include <random>
+#include <algorithm>
 
 extern int rows;         // The count of rows of the game map.
 extern int columns;      // The count of columns of the game map.
 extern int total_mines;  // The count of mines of the game map.
 
 // You MUST NOT use any other external variables except for rows, columns and total_mines.
+
+// AI Client global variables for game state tracking
+std::vector<std::vector<int>> visible_map;      // -1: unknown, 0-8: mine count, 9: mine (when visited)
+std::vector<std::vector<bool>> is_marked;       // True if grid is marked as mine
+std::vector<std::vector<double>> mine_probability; // Probability of each grid being a mine
+int total_cells_visited = 0;
+int total_mines_marked = 0;
+bool first_move = true;
+
+// Helper function declarations
+void updateMineProbabilities();
+std::pair<int, int> findObviousSafe();
+std::pair<int, int> findObviousMine();
+std::pair<int, int> findBestAutoExplore();
+std::pair<int, int> findSafestCell();
 
 /**
  * @brief The definition of function Execute(int, int, bool)
@@ -34,10 +54,18 @@ void Execute(int r, int c, int type);
  * will read the scale of the game map and the first step taken by the server (see README).
  */
 void InitGame() {
-  // TODO (student): Initialize all your global variables!
+  // Initialize all global variables
+  visible_map.assign(rows, std::vector<int>(columns, -1));
+  is_marked.assign(rows, std::vector<bool>(columns, false));
+  mine_probability.assign(rows, std::vector<double>(columns, 0.5));
+  total_cells_visited = 0;
+  total_mines_marked = 0;
+  first_move = true;
+
   int first_row, first_column;
   std::cin >> first_row >> first_column;
   Execute(first_row, first_column, 0);
+  first_move = false;
 }
 
 /**
@@ -51,7 +79,231 @@ void InitGame() {
  *     01?
  */
 void ReadMap() {
-  // TODO (student): Implement me!
+  // Read the current map state from stdin
+  for (int i = 0; i < rows; i++) {
+    std::string line;
+    std::cin >> line;
+    for (int j = 0; j < columns; j++) {
+      char c = line[j];
+      if (c == '?') {
+        if (visible_map[i][j] != -1) {
+          // This cell was previously visible but is now unknown
+          // This shouldn't happen in normal gameplay
+        }
+        visible_map[i][j] = -1;
+      } else if (c == '@') {
+        // Marked mine
+        is_marked[i][j] = true;
+        visible_map[i][j] = -1;
+      } else if (c == 'X') {
+        // Visited mine (game over)
+        visible_map[i][j] = 9;
+      } else if (c >= '0' && c <= '8') {
+        // Visited non-mine with mine count
+        visible_map[i][j] = c - '0';
+        is_marked[i][j] = false;
+        total_cells_visited++;
+      }
+    }
+  }
+
+  // Update mine probabilities based on new information
+  updateMineProbabilities();
+}
+
+// Helper function to update mine probabilities
+void updateMineProbabilities() {
+  // Reset probabilities
+  for (int i = 0; i < rows; i++) {
+    for (int j = 0; j < columns; j++) {
+      if (visible_map[i][j] == -1 && !is_marked[i][j]) {
+        mine_probability[i][j] = 0.5; // Default probability
+      }
+    }
+  }
+
+  // Apply constraints based on numbered cells
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (int i = 0; i < rows; i++) {
+      for (int j = 0; j < columns; j++) {
+        if (visible_map[i][j] >= 0 && visible_map[i][j] <= 8) {
+          int count = visible_map[i][j];
+          std::vector<std::pair<int, int>> neighbors;
+          int marked_mines = 0;
+          int unknown_cells = 0;
+
+          // Check all 8 neighbors
+          int dr[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+          int dc[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+
+          for (int k = 0; k < 8; k++) {
+            int ni = i + dr[k];
+            int nj = j + dc[k];
+            if (ni >= 0 && ni < rows && nj >= 0 && nj < columns) {
+              if (is_marked[ni][nj]) {
+                marked_mines++;
+              } else if (visible_map[ni][nj] == -1) {
+                neighbors.push_back({ni, nj});
+                unknown_cells++;
+              }
+            }
+          }
+
+          int remaining_mines = count - marked_mines;
+          if (remaining_mines < 0) remaining_mines = 0;
+
+          // If remaining_mines == 0, all unknown neighbors are safe
+          if (remaining_mines == 0 && unknown_cells > 0) {
+            for (auto& [ni, nj] : neighbors) {
+              if (mine_probability[ni][nj] != 0.0) {
+                mine_probability[ni][nj] = 0.0;
+                changed = true;
+              }
+            }
+          }
+          // If remaining_mines == unknown_cells, all unknown neighbors are mines
+          else if (remaining_mines == unknown_cells && unknown_cells > 0) {
+            for (auto& [ni, nj] : neighbors) {
+              if (mine_probability[ni][nj] != 1.0) {
+                mine_probability[ni][nj] = 1.0;
+                changed = true;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// Helper function to find obvious safe cells
+std::pair<int, int> findObviousSafe() {
+  for (int i = 0; i < rows; i++) {
+    for (int j = 0; j < columns; j++) {
+      if (visible_map[i][j] >= 0 && visible_map[i][j] <= 8) {
+        int count = visible_map[i][j];
+        std::vector<std::pair<int, int>> neighbors;
+        int marked_mines = 0;
+        int unknown_cells = 0;
+
+        // Check all 8 neighbors
+        int dr[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+        int dc[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+
+        for (int k = 0; k < 8; k++) {
+          int ni = i + dr[k];
+          int nj = j + dc[k];
+          if (ni >= 0 && ni < rows && nj >= 0 && nj < columns) {
+            if (is_marked[ni][nj]) {
+              marked_mines++;
+            } else if (visible_map[ni][nj] == -1) {
+              neighbors.push_back({ni, nj});
+              unknown_cells++;
+            }
+          }
+        }
+
+        int remaining_mines = count - marked_mines;
+        if (remaining_mines == 0 && unknown_cells > 0) {
+          return neighbors[0]; // Return first safe cell
+        }
+      }
+    }
+  }
+  return {-1, -1}; // No obvious safe cell found
+}
+
+// Helper function to find obvious mines
+std::pair<int, int> findObviousMine() {
+  for (int i = 0; i < rows; i++) {
+    for (int j = 0; j < columns; j++) {
+      if (visible_map[i][j] >= 0 && visible_map[i][j] <= 8) {
+        int count = visible_map[i][j];
+        std::vector<std::pair<int, int>> neighbors;
+        int marked_mines = 0;
+        int unknown_cells = 0;
+
+        // Check all 8 neighbors
+        int dr[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+        int dc[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+
+        for (int k = 0; k < 8; k++) {
+          int ni = i + dr[k];
+          int nj = j + dc[k];
+          if (ni >= 0 && ni < rows && nj >= 0 && nj < columns) {
+            if (is_marked[ni][nj]) {
+              marked_mines++;
+            } else if (visible_map[ni][nj] == -1) {
+              neighbors.push_back({ni, nj});
+              unknown_cells++;
+            }
+          }
+        }
+
+        int remaining_mines = count - marked_mines;
+        if (remaining_mines == unknown_cells && unknown_cells > 0) {
+          return neighbors[0]; // Return first obvious mine
+        }
+      }
+    }
+  }
+  return {-1, -1}; // No obvious mine found
+}
+
+// Helper function to find best auto-explore opportunity
+std::pair<int, int> findBestAutoExplore() {
+  for (int i = 0; i < rows; i++) {
+    for (int j = 0; j < columns; j++) {
+      if (visible_map[i][j] >= 1 && visible_map[i][j] <= 8) {
+        int count = visible_map[i][j];
+        int marked_mines = 0;
+        int unknown_cells = 0;
+
+        // Check all 8 neighbors
+        int dr[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+        int dc[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+
+        for (int k = 0; k < 8; k++) {
+          int ni = i + dr[k];
+          int nj = j + dc[k];
+          if (ni >= 0 && ni < rows && nj >= 0 && nj < columns) {
+            if (is_marked[ni][nj]) {
+              marked_mines++;
+            } else if (visible_map[ni][nj] == -1) {
+              unknown_cells++;
+            }
+          }
+        }
+
+        // If all mines are marked, we can auto-explore
+        if (marked_mines == count && unknown_cells > 0) {
+          return {i, j};
+        }
+      }
+    }
+  }
+  return {-1, -1}; // No auto-explore opportunity found
+}
+
+// Helper function to find safest unknown cell
+std::pair<int, int> findSafestCell() {
+  double min_prob = 1.0;
+  std::pair<int, int> safest = {-1, -1};
+
+  for (int i = 0; i < rows; i++) {
+    for (int j = 0; j < columns; j++) {
+      if (visible_map[i][j] == -1 && !is_marked[i][j]) {
+        if (mine_probability[i][j] < min_prob) {
+          min_prob = mine_probability[i][j];
+          safest = {i, j};
+        }
+      }
+    }
+  }
+
+  return safest;
 }
 
 /**
@@ -61,10 +313,52 @@ void ReadMap() {
  * mind and make your decision here! Caution: you can only execute once in this function.
  */
 void Decide() {
-  // TODO (student): Implement me!
-  // while (true) {
-  //   Execute(0, 0);
-  // }
+  // Priority 1: Auto-explore if possible (most efficient)
+  auto auto_explore = findBestAutoExplore();
+  if (auto_explore.first != -1) {
+    Execute(auto_explore.first, auto_explore.second, 2);
+    return;
+  }
+
+  // Priority 2: Mark obvious mines
+  auto obvious_mine = findObviousMine();
+  if (obvious_mine.first != -1) {
+    Execute(obvious_mine.first, obvious_mine.second, 1);
+    total_mines_marked++;
+    return;
+  }
+
+  // Priority 3: Visit obvious safe cells
+  auto obvious_safe = findObviousSafe();
+  if (obvious_safe.first != -1) {
+    Execute(obvious_safe.first, obvious_safe.second, 0);
+    return;
+  }
+
+  // Priority 4: Choose the safest cell based on probability
+  auto safest = findSafestCell();
+  if (safest.first != -1) {
+    Execute(safest.first, safest.second, 0);
+    return;
+  }
+
+  // Fallback: choose a random unknown cell (should not happen)
+  std::vector<std::pair<int, int>> unknown_cells;
+  for (int i = 0; i < rows; i++) {
+    for (int j = 0; j < columns; j++) {
+      if (visible_map[i][j] == -1 && !is_marked[i][j]) {
+        unknown_cells.push_back({i, j});
+      }
+    }
+  }
+
+  if (!unknown_cells.empty()) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, unknown_cells.size() - 1);
+    auto chosen = unknown_cells[dis(gen)];
+    Execute(chosen.first, chosen.second, 0);
+  }
 }
 
 #endif
