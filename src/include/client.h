@@ -25,6 +25,10 @@ bool first_move = true;
 
 // Helper function declarations
 void updateMineProbabilities();
+void performAdvancedPatternAnalysis();
+bool isSubset(const std::vector<std::pair<int, int>>& a, const std::vector<std::pair<int, int>>& b);
+std::vector<std::pair<int, int>> getDifference(const std::vector<std::pair<int, int>>& b,
+                                               const std::vector<std::pair<int, int>>& a);
 std::pair<int, int> findObviousSafe();
 std::pair<int, int> findObviousMine();
 std::pair<int, int> findBestAutoExplore();
@@ -111,7 +115,7 @@ void ReadMap() {
   updateMineProbabilities();
 }
 
-// Helper function to update mine probabilities
+// Helper function to update mine probabilities with advanced pattern recognition
 void updateMineProbabilities() {
   // Reset probabilities
   for (int i = 0; i < rows; i++) {
@@ -176,6 +180,105 @@ void updateMineProbabilities() {
       }
     }
   }
+
+  // Advanced pattern analysis: check for logical deductions between adjacent numbered cells
+  performAdvancedPatternAnalysis();
+}
+
+// Advanced pattern analysis for complex logical deductions
+void performAdvancedPatternAnalysis() {
+  // Pattern 1: Check for 1-2 patterns and other common Minesweeper patterns
+  int dr[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+  int dc[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+
+  // Find all numbered cells
+  std::vector<std::tuple<int, int, int, std::vector<std::pair<int, int>>>> numbered_cells;
+
+  for (int i = 0; i < rows; i++) {
+    for (int j = 0; j < columns; j++) {
+      if (visible_map[i][j] >= 1 && visible_map[i][j] <= 8) {
+        std::vector<std::pair<int, int>> neighbors;
+        int marked_count = 0;
+
+        for (int k = 0; k < 8; k++) {
+          int ni = i + dr[k];
+          int nj = j + dc[k];
+          if (ni >= 0 && ni < rows && nj >= 0 && nj < columns) {
+            if (is_marked[ni][nj]) {
+              marked_count++;
+            } else if (visible_map[ni][nj] == -1) {
+              neighbors.push_back({ni, nj});
+            }
+          }
+        }
+
+        int remaining_mines = visible_map[i][j] - marked_count;
+        if (remaining_mines > 0 && !neighbors.empty()) {
+          numbered_cells.push_back({i, j, remaining_mines, neighbors});
+        }
+      }
+    }
+  }
+
+  // Pattern analysis: look for subset relationships between cells
+  for (size_t a = 0; a < numbered_cells.size(); a++) {
+    for (size_t b = a + 1; b < numbered_cells.size(); b++) {
+      auto [i1, j1, mines1, neighbors1] = numbered_cells[a];
+      auto [i2, j2, mines2, neighbors2] = numbered_cells[b];
+
+      // Check if neighbors1 is a subset of neighbors2
+      if (isSubset(neighbors1, neighbors2)) {
+        // If mines1 == mines2, then neighbors2 - neighbors1 are safe
+        if (mines1 == mines2) {
+          auto diff = getDifference(neighbors2, neighbors1);
+          for (auto& [ni, nj] : diff) {
+            mine_probability[ni][nj] = 0.0;
+          }
+        }
+        // If mines2 == mines1 + |neighbors2| - |neighbors1|, then neighbors2 - neighbors1 are mines
+        else if (mines2 == mines1 + (int)neighbors2.size() - (int)neighbors1.size()) {
+          auto diff = getDifference(neighbors2, neighbors1);
+          for (auto& [ni, nj] : diff) {
+            mine_probability[ni][nj] = 1.0;
+          }
+        }
+      }
+    }
+  }
+}
+
+// Helper function to check if vector A is subset of vector B
+bool isSubset(const std::vector<std::pair<int, int>>& a, const std::vector<std::pair<int, int>>& b) {
+  for (auto& cell : a) {
+    bool found = false;
+    for (auto& bcell : b) {
+      if (cell.first == bcell.first && cell.second == bcell.second) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+  }
+  return true;
+}
+
+// Helper function to get B - A (elements in B not in A)
+std::vector<std::pair<int, int>> getDifference(const std::vector<std::pair<int, int>>& b,
+                                               const std::vector<std::pair<int, int>>& a) {
+  std::vector<std::pair<int, int>> diff;
+  for (auto& bcell : b) {
+    bool found = false;
+    for (auto& acell : a) {
+      if (bcell.first == acell.first && bcell.second == acell.second) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      diff.push_back(bcell);
+    }
+  }
+  return diff;
 }
 
 // Helper function to find obvious safe cells
